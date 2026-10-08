@@ -1,0 +1,154 @@
+openapi: 3.0.3
+info:
+  title: markets-service
+  description: Real-time stock prices, market schedules, stock catalog.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8083/api/v1
+tags:
+  - name: stocks
+  - name: markets
+paths:
+  /markets/stocks:
+    get:
+      tags:
+        - stocks
+      summary: Get list of stocks with current prices
+      description: Returns stocks filtered by market and/or sector. Prices are cached in Caffeine with configurable TTL (default 2s).
+      parameters:
+        - name: markets
+          in: query
+          schema:
+            type: string
+          description: Comma-separated market codes (e.g. nyse,nasdaq)
+          example: nyse,nasdaq
+        - name: sectors
+          in: query
+          schema:
+            type: string
+          description: Comma-separated sector codes (e.g. tech,health)
+          example: tech,health
+      responses:
+        '200':
+          description: List of stocks
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/StockResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /markets/stocks/{symbol}:
+    get:
+      tags:
+        - stocks
+      summary: Get current price for a specific symbol
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+          example: AAPL
+      responses:
+        '200':
+          description: Stock price
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StockResponse'
+        '404':
+          description: Symbol not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Símbolo no encontrado"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /markets/status/{symbol}:
+    get:
+      tags:
+        - markets
+      summary: Check if the market for a symbol is currently open
+      description: Used by trading-service before placing an order.
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+          example: AAPL
+      responses:
+        '200':
+          description: Market status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MarketStatusResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+    StockResponse:
+      type: object
+      properties:
+        symbol:
+          type: string
+          example: AAPL
+        companyName:
+          type: string
+          example: Apple Inc.
+        market:
+          type: string
+          enum:
+            - NYSE
+            - NASDAQ
+        sector:
+          type: string
+          enum:
+            - tech
+            - health
+            - consumer
+        price:
+          type: number
+          format: double
+          example: 175.42
+        change24h:
+          type: number
+          format: double
+          example: 1.23
+    MarketStatusResponse:
+      type: object
+      properties:
+        symbol:
+          type: string
+        market:
+          type: string
+        open:
+          type: boolean
+        opensAt:
+          type: string
+        closesAt:
+          type: string

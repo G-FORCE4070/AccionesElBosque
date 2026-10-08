@@ -1,0 +1,144 @@
+services:
+
+  postgres:
+    image: postgres:15
+    container_name: aeb-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-acciones_elbosque}
+      POSTGRES_USER: ${POSTGRES_USER:-aeb_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aeb_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aeb_user} -d ${POSTGRES_DB:-acciones_elbosque}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  elasticsearch:
+    image: elasticsearch:8.11.0
+    container_name: aeb-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  identity-service:
+    build: ./backend/identity-service
+    container_name: aeb-identity
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ALPACA_BROKER_BASE_URL: ${ALPACA_BROKER_BASE_URL}
+      ALPACA_BROKER_API_KEY: ${ALPACA_BROKER_API_KEY}
+      ALPACA_BROKER_SECRET_KEY: ${ALPACA_BROKER_SECRET_KEY}
+      ALPACA_FIRM_ACCOUNT_ID: ${ALPACA_FIRM_ACCOUNT_ID}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      STRIPE_PREMIUM_MONTHLY_PRICE_ID: ${STRIPE_PREMIUM_MONTHLY_PRICE_ID}
+      STRIPE_PREMIUM_ANNUAL_PRICE_ID: ${STRIPE_PREMIUM_ANNUAL_PRICE_ID}
+      MAIL_HOST: ${MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      AUDIT_SERVICE_URL: http://audit-service:8085
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  trading-service:
+    build: ./backend/trading-service
+    container_name: aeb-trading
+    ports:
+      - "8082:8082"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ALPACA_BROKER_BASE_URL: ${ALPACA_BROKER_BASE_URL}
+      ALPACA_BROKER_API_KEY: ${ALPACA_BROKER_API_KEY}
+      ALPACA_BROKER_SECRET_KEY: ${ALPACA_BROKER_SECRET_KEY}
+      COMMISSION_PERCENTAGE: ${COMMISSION_PERCENTAGE:-0.02}
+      COMMISSION_PLATFORM_PERCENTAGE: ${COMMISSION_PLATFORM_PERCENTAGE:-0.60}
+      COMMISSION_BROKER_PERCENTAGE: ${COMMISSION_BROKER_PERCENTAGE:-0.40}
+      DOUBLE_AUTH_THRESHOLD_USD: ${DOUBLE_AUTH_THRESHOLD_USD:-10000}
+      MARKETS_SERVICE_URL: http://markets-service:8083
+      IDENTITY_SERVICE_URL: http://identity-service:8081
+      NOTIFICATION_SERVICE_URL: http://notification-service:8084
+      AUDIT_SERVICE_URL: http://audit-service:8085
+    depends_on:
+      postgres:
+        condition: service_healthy
+      markets-service:
+        condition: service_started
+
+  markets-service:
+    build: ./backend/markets-service
+    container_name: aeb-markets
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      ALPACA_MARKET_DATA_BASE_URL: ${ALPACA_MARKET_DATA_BASE_URL}
+      ALPACA_MARKET_DATA_API_KEY: ${ALPACA_MARKET_DATA_API_KEY}
+      ALPACA_MARKET_DATA_SECRET_KEY: ${ALPACA_MARKET_DATA_SECRET_KEY}
+      CACHE_TTL_SECONDS: ${CACHE_TTL_SECONDS:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  notification-service:
+    build: ./backend/notification-service
+    container_name: aeb-notification
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
+      MAIL_HOST: ${MAIL_HOST}
+      MAIL_PORT: ${MAIL_PORT}
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      IDENTITY_SERVICE_URL: http://identity-service:8081
+      AUDIT_SERVICE_URL: http://audit-service:8085
+    depends_on:
+      postgres:
+        condition: service_healthy
+      identity-service:
+        condition: service_started
+
+  audit-service:
+    build: ./backend/audit-service
+    container_name: aeb-audit
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_ELASTICSEARCH_URIS: http://elasticsearch:9200
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  es_data:

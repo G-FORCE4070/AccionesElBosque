@@ -1,0 +1,28 @@
+spring:
+  config:
+    import: optional:file:../../.env[.properties]
+  application:
+    name: notification-service
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+
+server:
+  port: 8084
+
+services:
+  identity-url: ${IDENTITY_URL:http://localhost:8081}
+  audit-url: ${AUDIT_URL:http://localhost:8085}
+
+management:
+  health:
+    mail:
+      enabled: false

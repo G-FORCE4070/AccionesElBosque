@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: markets-service
+  cache:
+    type: caffeine
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        default_schema: markets
+    show-sql: false
+
+jwt:
+  secret: default-secret-key-for-dev-must-be-min-32-chars
+
+alpaca:
+  market-data:
+    base-url: https://data.alpaca.markets/v2
+    api-key: test-key
+    secret-key: test-secret
+
+cache:
+  ttl-seconds: 1

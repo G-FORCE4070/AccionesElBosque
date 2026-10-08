@@ -1,0 +1,72 @@
+openapi: 3.0.3
+info:
+  title: audit-service
+  description: Internal service for storing audit events in Elasticsearch. All endpoints are internal — no JWT required. Only reachable from within the Docker network. In MVP: only receives and stores events. No query endpoints exposed to frontend.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8085/api/v1
+tags:
+  - name: internal
+paths:
+  /internal/events:
+    post:
+      tags:
+        - internal
+      summary: Store an audit event
+      description: Called asynchronously by all services. Stores the event in Elasticsearch.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditEventRequest'
+      responses:
+        '202':
+          description: Event accepted for storage
+components:
+  schemas:
+    AuditEventRequest:
+      type: object
+      required:
+        - timestamp
+        - service
+        - eventType
+        - userId
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        service:
+          type: string
+          enum:
+            - identity-service
+            - trading-service
+            - markets-service
+            - notification-service
+        eventType:
+          type: string
+          enum:
+            - USER_REGISTERED
+            - ALPACA_ACCOUNT_CREATED
+            - LOGIN_SUCCESS
+            - LOGIN_FAILED
+            - MFA_CODE_SENT
+            - MFA_FAILED
+            - PROFILE_UPDATED
+            - SUBSCRIPTION_CREATED
+            - SUBSCRIPTION_CANCELED
+            - PLAN_CHANGED
+            - ORDER_PLACED
+            - ORDER_EXECUTED
+            - ORDER_REJECTED
+            - NOTIFICATION_SENT
+            - NOTIFICATION_FAILED
+            - NOTIFICATION_SENT_DEFAULT_PREFS
+        userId:
+          type: string
+        correlationId:
+          type: string
+        details:
+          type: object
+          additionalProperties: true

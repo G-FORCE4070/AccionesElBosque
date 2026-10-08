@@ -1,0 +1,47 @@
+openapi: 3.0.3
+info:
+  title: notification-service
+  description: Internal service for sending business notifications by email. All endpoints are internal — no JWT required. Only reachable from within the Docker network.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8084/api/v1
+tags:
+  - name: internal
+paths:
+  /internal/notifications:
+    post:
+      tags:
+        - internal
+      summary: Send a business notification
+      description: Called asynchronously by trading-service after an order is executed. Before sending, queries identity-service for user preferences. If preferences query fails, applies defaults (email enabled, orderConfirm active) and registers NOTIFICATION_SENT_DEFAULT_PREFS in audit.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NotificationRequest'
+      responses:
+        '202':
+          description: Notification accepted for processing
+components:
+  schemas:
+    NotificationRequest:
+      type: object
+      required:
+        - userId
+        - eventType
+      properties:
+        userId:
+          type: string
+        eventType:
+          type: string
+          enum:
+            - ORDER_EXECUTED
+            - MARKET_OPEN
+            - MARKET_CLOSE
+            - DAILY_SUMMARY
+            - PRICE_ALERT
+        data:
+          type: object
+          additionalProperties: true

@@ -1,0 +1,41 @@
+spring:
+  config:
+    import: optional:file:../../.env[.properties]
+  application:
+    name: trading-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/acciones_elbosque}
+    username: ${POSTGRES_USER:aeb_user}
+    password: ${POSTGRES_PASSWORD:aeb_trading_muy_seguro}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        default_schema: trading
+    show-sql: false
+
+server:
+  port: 8082
+
+jwt:
+  secret: ${JWT_SECRET:default-secret-key-for-dev-must-be-min-32-chars}
+
+alpaca:
+  broker:
+    base-url: ${ALPACA_BROKER_BASE_URL:https://broker-api.sandbox.alpaca.markets}
+    api-key: ${ALPACA_BROKER_API_KEY:test-key}
+    secret-key: ${ALPACA_BROKER_SECRET_KEY:test-secret}
+    auth-url: https://authx.sandbox.alpaca.markets
+  market-data:
+    api-key: ${ALPACA_MARKET_DATA_API_KEY:test-key}
+    secret-key: ${ALPACA_MARKET_DATA_SECRET_KEY:test-secret}
+
+services:
+  markets-url: ${MARKETS_SERVICE_URL:http://localhost:8083}
+  notification-url: ${NOTIFICATION_SERVICE_URL:http://localhost:8084}
+  audit-url: ${AUDIT_SERVICE_URL:http://localhost:8085}
+
+commission:
+  percentage: ${COMMISSION_PERCENTAGE:0.02}

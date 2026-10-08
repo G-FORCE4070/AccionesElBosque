@@ -1,0 +1,861 @@
+openapi: 3.0.3
+info:
+  title: identity-service
+  description: Registro, login, MFA, perfil, preferencias, watchlist y suscripcion Premium.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8081/api/v1
+tags:
+  - name: auth
+  - name: users
+  - name: watchlist
+  - name: subscriptions
+  - name: internal
+paths:
+  /auth/check-email:
+    get:
+      tags:
+        - auth
+      summary: Check if an email address is already registered
+      description: Used by the frontend in Step 1 (onBlur) to give early feedback before form submission.
+      security: []
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema:
+            type: string
+            format: email
+      responses:
+        '200':
+          description: Availability result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  available:
+                    type: boolean
+                    description: true if the email is not yet registered
+  /auth/register:
+    post:
+      tags:
+        - auth
+      summary: Register a new investor
+      description: >
+        Creates an investor account as BASIC, creates an Alpaca Broker account (required — rolls back on failure),
+        and attempts to fund it with $50,000 USD via ACH relationship + transfer (non-fatal — sandbox auto-approves ACH relationship in ~60s).
+        If plan is PREMIUM, returns a Stripe checkoutUrl.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Account created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        '409':
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "El correo electrónico ya está registrado"
+        '500':
+          description: Alpaca account creation failed — full rollback applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "No se pudo completar el registro. Intente nuevamente."
+  /auth/login:
+    post:
+      tags:
+        - auth
+      summary: Login with email and password
+      description: Validates credentials and sends a 6-digit MFA code to the user's email. Returns a sessionId to be used in the MFA verification step. The sessionId is stored in Caffeine cache with 5-minute TTL.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Credentials valid, MFA code sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Email o contraseña inválidos"
+  /auth/mfa/verify:
+    post:
+      tags:
+        - auth
+      summary: Verify MFA code and get JWT
+      description: Validates the 6-digit code against the cached session. Returns a JWT on success. Maximum 3 failed attempts — code is invalidated on the 3rd failure. Returns 404 if the sessionId does not exist (expired or service restarted).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaVerifyRequest'
+      responses:
+        '200':
+          description: MFA verified, JWT returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MfaVerifyResponse'
+        '400':
+          description: Invalid code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Código inválido"
+        '404':
+          description: Session not found or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "El código ha expirado"
+  /auth/mfa/resend:
+    post:
+      tags:
+        - auth
+      summary: Resend MFA code
+      description: Generates and sends a new MFA code. Maximum 3 resends per login session.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MfaResendRequest'
+      responses:
+        '200':
+          description: New code sent
+        '400':
+          description: Maximum resends reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Máximo de reenvíos alcanzado"
+  /users/me:
+    get:
+      tags:
+        - users
+      summary: Get current user full profile
+      description: Returns personal data, preferences, assigned broker info, and subscription plan.
+      responses:
+        '200':
+          description: Full profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfileResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /users/me/personal:
+    put:
+      tags:
+        - users
+      summary: Update personal data
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePersonalRequest'
+      responses:
+        '200':
+          description: Personal data updated
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /users/me/preferences:
+    put:
+      tags:
+        - users
+      summary: Update notification, display and trading preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePreferencesRequest'
+      responses:
+        '200':
+          description: Preferences updated
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /users/me/alpaca/fund:
+    post:
+      tags:
+        - users
+      summary: Retry Alpaca account funding
+      description: >
+        Creates a new ACH relationship and transfer of $50,000 for the authenticated user's Alpaca account.
+        Use this for accounts that were registered before the ACH funding was introduced or whose initial
+        funding attempt failed. Non-idempotent — may create duplicate transfers if called multiple times.
+      responses:
+        '200':
+          description: ACH funding initiated — funds available once sandbox processes the transfer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: Alpaca account ID not found or ACH creation failed
+  /watchlist:
+    get:
+      tags:
+        - watchlist
+      summary: Get watchlist symbols (PREMIUM only)
+      responses:
+        '200':
+          description: List of symbols
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WatchlistResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: BASIC plan — Premium required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "Funcionalidad exclusiva para usuarios Premium"
+  /watchlist/{symbol}:
+    post:
+      tags:
+        - watchlist
+      summary: Add symbol to watchlist (PREMIUM only)
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+            example: AAPL
+      responses:
+        '201':
+          description: Symbol added
+        '409':
+          description: Symbol already in watchlist
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "El símbolo ya está en tu watchlist"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/PremiumRequired'
+    delete:
+      tags:
+        - watchlist
+      summary: Remove symbol from watchlist (PREMIUM only)
+      parameters:
+        - name: symbol
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Symbol removed
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/PremiumRequired'
+  /subscriptions/checkout:
+    post:
+      tags:
+        - subscriptions
+      summary: Create Stripe checkout session for Premium upgrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckoutRequest'
+      responses:
+        '200':
+          description: Stripe checkout URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckoutResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /subscriptions/confirm:
+    post:
+      tags:
+        - subscriptions
+      summary: Confirm Stripe payment and upgrade plan to PREMIUM
+      description: >
+        Called by the frontend after Stripe redirects to /payment/success?session_id=...
+        Retrieves the Stripe session, verifies paymentStatus == "paid", and upgrades the user plan to PREMIUM.
+        No webhooks used in MVP — polling approach via this endpoint.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - sessionId
+              properties:
+                sessionId:
+                  type: string
+      responses:
+        '200':
+          description: Payment confirmed, plan upgraded to PREMIUM
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  plan:
+                    type: string
+                    enum: [PREMIUM]
+        '402':
+          description: Payment not completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error: "El pago no fue completado"
+  /subscriptions/webhook:
+    post:
+      tags:
+        - subscriptions
+      summary: Stripe webhook — NOT implemented in MVP
+      description: >
+        Reserved for future use. MVP uses /subscriptions/confirm (polling) instead of webhooks.
+        Do not use in MVP.
+      security: []
+      responses:
+        '200':
+          description: Not implemented
+  /subscriptions/cancel:
+    post:
+      tags:
+        - subscriptions
+      summary: Cancel Premium subscription
+      description: Plan remains PREMIUM until the end of the paid period, then reverts to BASIC.
+      responses:
+        '200':
+          description: Cancellation scheduled
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /internal/users/{userId}/preferences:
+    get:
+      tags:
+        - internal
+      summary: Get user preferences (called by notification-service)
+      security: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User preferences
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserPreferencesInternal'
+        '404':
+          description: User not found
+  /internal/users/{userId}/broker:
+    get:
+      tags:
+        - internal
+      summary: Get assigned broker info (called by trading-service)
+      security: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Broker info (null if no broker assigned)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrokerInfoInternal'
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Tu sesión ha expirado. Por favor, inicia sesión nuevamente."
+    ValidationError:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PremiumRequired:
+      description: Feature requires Premium plan
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: "Funcionalidad exclusiva para usuarios Premium"
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+    RegisterRequest:
+      type: object
+      required:
+        - firstName
+        - lastName
+        - email
+        - phone
+        - password
+        - birthDate
+        - docType
+        - docNumber
+        - nationality
+        - country
+        - address
+        - city
+        - postalCode
+        - incomeSource
+        - annualIncome
+        - netWorth
+        - riskTolerance
+        - tradingExperience
+        - investmentGoal
+        - isPep
+        - isFinraAffiliated
+        - acceptsTerms
+        - acceptsPrivacy
+        - authorizeDataUse
+        - markets
+        - sectors
+        - plan
+      properties:
+        firstName:
+          type: string
+          minLength: 2
+        lastName:
+          type: string
+          minLength: 2
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          minLength: 7
+        password:
+          type: string
+          minLength: 8
+        birthDate:
+          type: string
+          format: date
+        docType:
+          type: string
+          enum:
+            - cc
+            - ce
+            - passport
+        docNumber:
+          type: string
+        nationality:
+          type: string
+        country:
+          type: string
+        address:
+          type: string
+        city:
+          type: string
+        postalCode:
+          type: string
+        incomeSource:
+          type: string
+          enum:
+            - salary
+            - business
+            - investments
+            - pension
+            - other
+        annualIncome:
+          type: string
+          enum:
+            - "<30k"
+            - "30k-100k"
+            - "100k-500k"
+            - ">500k"
+        netWorth:
+          type: string
+          enum:
+            - "<50k"
+            - "50k-250k"
+            - ">250k"
+        riskTolerance:
+          type: string
+          enum:
+            - conservative
+            - moderate
+            - aggressive
+        tradingExperience:
+          type: string
+          enum:
+            - beginner
+            - experienced
+        investmentGoal:
+          type: string
+          enum:
+            - preservation
+            - income
+            - growth
+            - speculation
+        isPep:
+          type: boolean
+        isFinraAffiliated:
+          type: boolean
+        acceptsTerms:
+          type: boolean
+        acceptsPrivacy:
+          type: boolean
+        authorizeDataUse:
+          type: boolean
+        markets:
+          type: array
+          items:
+            type: string
+            enum:
+              - nyse
+              - nasdaq
+          minItems: 1
+          maxItems: 1
+        sectors:
+          type: array
+          items:
+            type: string
+            enum:
+              - tech
+              - health
+              - consumer
+          minItems: 1
+          maxItems: 1
+        notifEmail:
+          type: boolean
+          default: true
+        notifSms:
+          type: boolean
+          default: false
+        notifWhatsapp:
+          type: boolean
+          default: false
+        monthlyReport:
+          type: boolean
+          default: false
+        plan:
+          type: string
+          enum:
+            - basic
+            - premium
+        billingCycle:
+          type: string
+          enum:
+            - monthly
+            - annual
+          description: Required when plan is premium. Determines which Stripe price_id is used.
+    RegisterResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: "Registro exitoso. Revisa tu correo de bienvenida."
+        checkoutUrl:
+          type: string
+          nullable: true
+          example: "https://checkout.stripe.com/pay/cs_test_..."
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+    LoginResponse:
+      type: object
+      properties:
+        sessionId:
+          type: string
+    MfaVerifyRequest:
+      type: object
+      required:
+        - sessionId
+        - code
+      properties:
+        sessionId:
+          type: string
+        code:
+          type: string
+          minLength: 6
+          maxLength: 6
+    MfaVerifyResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+            firstName:
+              type: string
+            lastName:
+              type: string
+            email:
+              type: string
+            role:
+              type: string
+              enum:
+                - INVESTOR
+                - BROKER
+                - ADMIN
+                - LEGAL
+            plan:
+              type: string
+              enum:
+                - BASIC
+                - PREMIUM
+    MfaResendRequest:
+      type: object
+      required:
+        - sessionId
+      properties:
+        sessionId:
+          type: string
+    UserProfileResponse:
+      type: object
+      properties:
+        id:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+        birthDate:
+          type: string
+          format: date
+        nationality:
+          type: string
+        address:
+          type: string
+        role:
+          type: string
+          enum:
+            - INVESTOR
+            - BROKER
+            - ADMIN
+            - LEGAL
+        plan:
+          type: string
+          enum:
+            - BASIC
+            - PREMIUM
+        preferences:
+          $ref: '#/components/schemas/UserPreferencesInternal'
+        broker:
+          $ref: '#/components/schemas/BrokerInfoInternal'
+    UpdatePersonalRequest:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+        birthDate:
+          type: string
+          format: date
+        nationality:
+          type: string
+        address:
+          type: string
+    UpdatePreferencesRequest:
+      type: object
+      properties:
+        marketOpen:
+          type: boolean
+        priceAlerts:
+          type: boolean
+        dailySummary:
+          type: boolean
+        orderConfirm:
+          type: boolean
+        notifEmail:
+          type: boolean
+        notifSms:
+          type: boolean
+        notifWhatsapp:
+          type: boolean
+        monthlyReport:
+          type: boolean
+        viewType:
+          type: string
+          enum:
+            - list
+            - bars
+            - detail
+        defaultOrder:
+          type: string
+          enum:
+            - totalValue
+            - gainPct
+            - symbol
+        showLowWeight:
+          type: boolean
+        defaultOrderType:
+          type: string
+          enum:
+            - market
+            - limit
+            - stop_loss
+            - take_profit
+        dailyLimit:
+          type: integer
+          minimum: 0
+        requireDoubleAuth:
+          type: boolean
+        market:
+          type: string
+          enum: [nyse, nasdaq]
+        sector:
+          type: string
+          enum: [tech, health, consumer]
+    WatchlistResponse:
+      type: object
+      properties:
+        symbols:
+          type: array
+          items:
+            type: string
+    CheckoutRequest:
+      type: object
+      required:
+        - billingCycle
+      properties:
+        billingCycle:
+          type: string
+          enum:
+            - monthly
+            - annual
+    CheckoutResponse:
+      type: object
+      properties:
+        checkoutUrl:
+          type: string
+    UserPreferencesInternal:
+      type: object
+      properties:
+        marketOpen:
+          type: boolean
+        priceAlerts:
+          type: boolean
+        dailySummary:
+          type: boolean
+        orderConfirm:
+          type: boolean
+        notifEmail:
+          type: boolean
+        notifSms:
+          type: boolean
+        notifWhatsapp:
+          type: boolean
+        monthlyReport:
+          type: boolean
+        viewType:
+          type: string
+        defaultOrder:
+          type: string
+        showLowWeight:
+          type: boolean
+        defaultOrderType:
+          type: string
+        dailyLimit:
+          type: integer
+        requireDoubleAuth:
+          type: boolean
+        market:
+          type: string
+        sector:
+          type: string
+    BrokerInfoInternal:
+      type: object
+      nullable: true
+      properties:
+        brokerId:
+          type: string
+        name:
+          type: string
+        since:
+          type: string
+          format: date
